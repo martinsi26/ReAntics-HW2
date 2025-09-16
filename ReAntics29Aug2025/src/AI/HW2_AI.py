@@ -323,7 +323,14 @@ class TestMethods(unittest.TestCase):
         self.assertIsInstance(result, float)
         self.assertGreaterEqual(result, 0)
         self.assertLessEqual(result, 1)
+    def test_BestMove(self):
+        n1 = Node("move1", None, 1, 0, None)
+        n2 = Node("move2", None, 1, 0.6, None)
+        n3 = Node("move3", None, 1, -0.7, None)  
         
+        agent = AIPlayer(0)
+        result = agent.bestMove([n1, n2, n3])
+        self.assertEqual(result, n2)
         
 if __name__ == "__main__":
     unittest.main()
