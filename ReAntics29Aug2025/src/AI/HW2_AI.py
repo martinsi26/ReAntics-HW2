@@ -147,7 +147,7 @@ class AIPlayer(Player):
         #ants = (WORKER, DRONE, SOLDIER, R_SOLDIER)
 
         myInv = getCurrPlayerInventory(currentState)
-        enemyInv = getEnemyInv(currentState)
+        enemyInv = getEnemyInv(self, currentState)
 
         #foodDif = myInv.foodCount - enemyInv.foodCount
 
@@ -156,11 +156,15 @@ class AIPlayer(Player):
 
         myAntCost = 0
         for ant in myAnts:
-            myAntCost += UNIT_STATS[ant.type][COST]
+            cost = UNIT_STATS[ant.type][COST]
+            if cost != None:
+                myAntCost += cost
 
         enemyAntCost = 0
         for ant in enemyAnts:
-            enemyAntCost += UNIT_STATS[ant.type][COST]
+            cost = UNIT_STATS[ant.type][COST]
+            if cost != None:
+                enemyAntCost += cost
 
         myNetWorth = myAntCost + myInv.foodCount
         enemyNetWorth = enemyAntCost + enemyInv.foodCount
@@ -271,7 +275,7 @@ class AIPlayer(Player):
         winChance += queenHPDif * hpFactor
 
         myAnthill = myInv.getAnthill()
-        myAnthillHP = CONSTR_STATS[myAnthill][CAP_HEALTH]
+        myAnthillHP = CONSTR_STATS[myAnthill.type][CAP_HEALTH]
         match myAnthillHP:
             case 1:
                 winChance -= 0.4
@@ -279,7 +283,7 @@ class AIPlayer(Player):
                 winChance = 0
 
         enemyAnthill = enemyInv.getAnthill()
-        enemyAnthillHP = CONSTR_STATS[enemyAnthill][CAP_HEALTH]
+        enemyAnthillHP = CONSTR_STATS[enemyAnthill.type][CAP_HEALTH]
         match enemyAnthillHP:
             case 1:
                 winChance += 0.4
@@ -300,6 +304,52 @@ class Node:
 
 class TestMethods(unittest.TestCase):
     
-    def testUtility(self):
-        print()
+    def test_Utility(self):
+        myAnts = [Ant(None, QUEEN, 0), Ant(None, WORKER, 0), Ant(None, DRONE, 0), Ant(None, SOLDIER, 0)]
+        enemyAnts = [Ant(None, QUEEN, 0), Ant(None, WORKER, 1)]
         
+        anthill = Construction(None, ANTHILL)
+        tunnel = Construction(None, TUNNEL)
+        
+        
+        myInv = Inventory(0, myAnts, [anthill, tunnel], 5)
+        enemyInv = Inventory(1, enemyAnts, [anthill, tunnel], 3)
+        
+        state = GameState(None, [myInv, enemyInv], 0, 0)
+        
+        agent = AIPlayer(0)
+        result = agent.utility(state)
+        
+        self.assertIsInstance(result, float)
+        self.assertGreaterEqual(result, 0)
+        self.assertLessEqual(result, 1)
+    
+    def test_BestMove(self):
+        n1 = Node("move1", None, 1, 0, None)
+        n2 = Node("move2", None, 1, 0.6, None)
+        n3 = Node("move3", None, 1, -0.7, None)  
+        
+        agent = AIPlayer(0)
+        result = agent.bestMove([n1, n2, n3])
+        self.assertEqual(result, n2)
+        
+    def test_getMove(self):
+        myAnts = [Ant((0,0), QUEEN, 0), Ant((1,0), WORKER, 0), Ant((2,2), DRONE, 0), Ant((3,3), SOLDIER, 0)]
+        enemyAnts = [Ant((0,0), QUEEN, 0), Ant((1,0), WORKER, 1)]
+        
+        anthill = Construction(None, ANTHILL)
+        tunnel = Construction(None, TUNNEL)
+        
+        myInv = Inventory(0, myAnts, [anthill, tunnel], 5)
+        enemyInv = Inventory(1, enemyAnts, [anthill, tunnel], 3)
+        neutralInv = Inventory(2, [], [], 0)
+        
+        state = GameState(None, [myInv, enemyInv, neutralInv], 0, 0)
+        
+        agent = AIPlayer(0)
+        result = agent.getMove(state)
+        self.assertEqual(result.moveType == MOVE_ANT, result.coordList == [(0,0),(0,1)])
+        
+        
+if __name__ == "__main__":
+    unittest.main()
