@@ -99,14 +99,22 @@ class AIPlayer(Player):
         moves = listAllLegalMoves(currentState)
         gameStates = []
         nodeList = []
+
+        # Step 1: store pre-move carrying state for all my workers
+        myWorkers = getAntList(currentState, currentState.whoseTurn, (WORKER,))
+        preCarrying = {worker.UniqueID: worker.carrying for worker in myWorkers}
+
+        # Step 2: generate simulated states and evaluate utility
         for move in moves:
             gameState = getNextState(currentState, move)
             gameStates.append(gameState)
-            node = Node(move, gameState, 1, self.utility(currentState), None)
+            node = Node(move, gameState, 1, self.utility(gameState, preCarrying), None)
             nodeList.append(node)
 
+        # Step 3: pick the best move
         winningNode = self.bestMove(nodeList)
         return winningNode.move
+
 
     
     ##
@@ -133,164 +141,165 @@ class AIPlayer(Player):
 
 
     def bestMove(self, nodeList):
-        bestChance = 0
-        winningNode = None
-        for node in nodeList:
-            if node.winChance > bestChance:
-                bestChance = node.winChance
-                winningNode = node
+        maxChance = max(node.winChance for node in nodeList)
+        bestNodes = [node for node in nodeList if node.winChance == maxChance]
+        return random.choice(bestNodes)
 
-        return winningNode
+    def utility(self, currentState, preCarrying):
+        winChance = 0.5  # baseline
 
+        myWorkers = getAntList(currentState, currentState.whoseTurn, (WORKER,))
+        myRSoldiers = getAntList(currentState, currentState.whoseTurn, (R_SOLDIER,))
+        foods = getConstrList(currentState, None, (FOOD,))
+        homeSpots = getConstrList(currentState, currentState.whoseTurn, (TUNNEL, ANTHILL))
 
-    def utility(self, currentState):
-        #ants = (WORKER, DRONE, SOLDIER, R_SOLDIER)
-
+        # Get current player's inventory
         myInv = getCurrPlayerInventory(currentState)
-        enemyInv = getEnemyInv(self, currentState)
 
-        #foodDif = myInv.foodCount - enemyInv.foodCount
+        # ----- Incentives / disincentives -----
+        numWorkers = len(myWorkers)
+        if numWorkers > 2:
+            winChance -= 0.05 * (numWorkers - 1)  # penalize having more than 1 worker
 
-        myAnts = myInv.ants
-        enemyAnts = enemyInv.ants
+        # Stored food incentive
+        winChance += 0.02 * myInv.foodCount
 
-        myAntCost = 0
-        for ant in myAnts:
-            cost = UNIT_STATS[ant.type][COST]
-            if cost != None:
-                myAntCost += cost
+        # ----- Worker movement / pickup / delivery -----
+        for worker in myWorkers:
+            workerID = worker.UniqueID
+            wasCarrying = preCarrying.get(workerID, False)
 
-        enemyAntCost = 0
-        for ant in enemyAnts:
-            cost = UNIT_STATS[ant.type][COST]
-            if cost != None:
-                enemyAntCost += cost
+            closestFood = min(foods, key=lambda f: stepsToReach(currentState, worker.coords, f.coords))
+            closestHome = min(homeSpots, key=lambda h: stepsToReach(currentState, worker.coords, h.coords))
 
-        myNetWorth = myAntCost + myInv.foodCount
-        enemyNetWorth = enemyAntCost + enemyInv.foodCount
-
-        netWorthDif = myNetWorth - enemyNetWorth
-
-        winChance = 0.5
-
-        foodFactor = 0.05
-        winChance += netWorthDif * foodFactor
-
-        myFood = myInv.foodCount
-        match myFood:
-            case 0:
-                if len(getAntList(currentState, currentState.whoseTurn, (WORKER,))) == 0:
-                    winChance = 0
-            case 1:
+            # Pickup / delivery incentive
+            if not wasCarrying and worker.carrying:  # just picked up food
                 winChance += 0.05
-            case 2:
+            elif wasCarrying and not worker.carrying:  # just delivered food
                 winChance += 0.05
-            case 3:
-                winChance += 0.1
-            case 4:
-                winChance += 0.15
-            case 5:
-                winChance += 0.2
-            case 6:
-                winChance += 0.25
-            case 7:
-                winChance += 0.3
-            case 8:
-                winChance += 0.35
-            case 9:
-                winChance += 0.4
-            case 10:
-                winChance += 0.45
-            case 11:
-                winChance = 1
+            else:
+                # Reward moving toward target
+                if not worker.carrying:  # heading to food
+                    dist = stepsToReach(currentState, worker.coords, closestFood.coords)
+                    winChance += 0.005 * max(0, 10 - dist)
+                else:  # heading to home
+                    dist = stepsToReach(currentState, worker.coords, closestHome.coords)
+                    winChance += 0.005 * max(0, 10 - dist)
 
-        enemyFood = enemyInv.foodCount
-        match enemyFood:
-            case 0:
-                if len(getAntList(currentState, currentState.whoseTurn - 1, (WORKER,))) == 0:
-                    winChance = 1
-            case 1:
-                winChance -= 0.05
-            case 2:
-                winChance -= 0.05
-            case 3:
-                winChance -= 0.1
-            case 4:
-                winChance -= 0.15
-            case 5:
-                winChance -= 0.2
-            case 6:
-                winChance -= 0.25
-            case 7:
-                winChance -= 0.3
-            case 8:
-                winChance -= 0.35
-            case 9:
-                winChance -= 0.4
-            case 10:
-                winChance -= 0.45
-            case 11:
-                winChance = 0
+        # ----- Ranged Soldier incentives -----
+        # Encourage having exactly 1 ranged soldier
+        if len(myRSoldiers) > 1:
+            winChance -= 0.05 * (len(myRSoldiers) - 1)
+        elif len(myRSoldiers) == 0:
+            winChance -= 0.05  # small penalty for having no ranged soldier
         
-        myQueenHP = myInv.getQueen().health
-        match myQueenHP:
-            case 8:
-                winChance -= 0.05
-            case 7:
-                winChance -= 0.1
-            case 6:
-                winChance -= 0.15
-            case 5:
-                winChance -= 0.2
-            case 4:
-                winChance -= 0.3
-            case 3:
-                winChance -= 0.35
-            case 2:
-                winChance -= 0.4
-            case 0:
-                winChance = 0
+        enemyAnts = getAntList(currentState, 1 - currentState.whoseTurn, (WORKER, QUEEN))
+        for r_soldier in myRSoldiers:
+            if enemyAnts:
+                closestEnemy = min(enemyAnts, key=lambda ea: stepsToReach(currentState, r_soldier.coords, ea.coords))
+                dist = stepsToReach(currentState, r_soldier.coords, closestEnemy.coords)
 
-        enemyQueenHP = enemyInv.getQueen().health
-        match enemyQueenHP:
-            case 8:
-                winChance -= 0.05
-            case 7:
-                winChance -= 0.1
-            case 6:
-                winChance -= 0.15
-            case 5:
-                winChance -= 0.2
-            case 4:
-                winChance -= 0.3
-            case 3:
-                winChance -= 0.35
-            case 2:
-                winChance -= 0.4
-            case 0:
-                winChance = 0
+                if dist >= 1:
+                    # Reward moving closer
+                    winChance += 0.01 * max(0, 10 - dist)
 
-        queenHPDif = myQueenHP - enemyQueenHP
-        hpFactor = 0.05
-        winChance += queenHPDif * hpFactor
 
-        myAnthill = myInv.getAnthill()
-        myAnthillHP = CONSTR_STATS[myAnthill.type][CAP_HEALTH]
-        match myAnthillHP:
-            case 1:
-                winChance -= 0.4
-            case 0:
-                winChance = 0
 
-        enemyAnthill = enemyInv.getAnthill()
-        enemyAnthillHP = CONSTR_STATS[enemyAnthill.type][CAP_HEALTH]
-        match enemyAnthillHP:
-            case 1:
-                winChance += 0.4
-            case 0:
-                winChance = 1
 
+
+        # Clamp to [0,1]
+        winChance = max(0, min(1, winChance))
         return winChance
+
+
+
+
+
+
+
+
+
+
+    # def utility(self, currentState):
+    #     """
+    #     Returns a value between 0 and 1 representing how well we are doing.
+    #     0 = lost, 1 = won.
+    #     """
+    #     myInv = getCurrPlayerInventory(currentState)
+    #     enemyInv = getEnemyInv(self, currentState)
+
+    #     winChance = 0.5  # start neutral
+
+    #     # --- Food difference (strong incentive, max ±0.4) ---
+    #     netFood = myInv.foodCount - enemyInv.foodCount
+    #     winChance += 0.1 * netFood
+
+    #     # # --- Queen health difference (moderate, max ±0.1) ---
+    #     myQueenHP = myInv.getQueen().health
+    #     enemyQueenHP = enemyInv.getQueen().health
+    #     winChance += 0.1 * (myQueenHP - enemyQueenHP)
+
+    #     # --- Workers ---
+    #     myWorkers = getAntList(currentState, currentState.whoseTurn, (WORKER,))
+    #     foods = getConstrList(currentState, None, (FOOD,))
+    #     homeSpots = getConstrList(currentState, currentState.whoseTurn, (TUNNEL, ANTHILL))
+
+    #     for worker in myWorkers:
+    #         # Initialize flags if they don't exist yet
+    #         if not hasattr(worker, "justSteppedOnFood"):
+    #             worker.justSteppedOnFood = False
+    #         if not hasattr(worker, "justSteppedOnHome"):
+    #             worker.justSteppedOnHome = False
+
+    #         closestFood = min(foods, key=lambda f: stepsToReach(currentState, worker.coords, f.coords))
+    #         closestHome = min(homeSpots, key=lambda h: stepsToReach(currentState, worker.coords, h.coords))
+
+    #         # Worker is going to food
+    #         if not worker.carrying:
+    #             # Step-on-home incentive (reset food flag)
+    #             if worker.coords == closestHome.coords and not worker.justSteppedOnHome:
+    #                 worker.justSteppedOnHome = True
+    #                 worker.justSteppedOnFood = False
+    #                 winChance += 0.05
+
+    #             else:
+    #                 # Distance-based incentive toward food
+    #                 dist = stepsToReach(currentState, worker.coords, closestFood.coords)
+    #                 winChance += 0.005 * (10 - dist)
+
+    #         # Worker is going to home
+    #         else:
+    #             # Step-on-food incentive (reset home flag)
+    #             if worker.coords == closestFood.coords and not worker.justSteppedOnFood:
+    #                 worker.justSteppedOnFood = True
+    #                 worker.justSteppedOnHome = False
+    #                 winChance += 0.05
+
+    #             else:
+    #                 # Distance-based incentive toward home
+    #                 dist = stepsToReach(currentState, worker.coords, closestHome.coords)
+    #                 winChance += 0.005 * (10 - dist)
+
+    #     if worker.coords == worker.prevCoords:
+    #         winChance -= 0.05
+    #     worker.prevCoords = worker.coords
+
+    #     # --- Penalize excess units ---
+    #     if len(myWorkers) > 1:
+    #         winChance -= 0.3
+    #     if len(getAntList(currentState, currentState.whoseTurn, (SOLDIER,))) > 1:
+    #         winChance -= 0.3
+    #     if len(getAntList(currentState, currentState.whoseTurn, (DRONE,))) > 1:
+    #         winChance -= 0.3
+    #     if len(getAntList(currentState, currentState.whoseTurn, (R_SOLDIER,))) > 1:
+    #         winChance -= 0.3
+
+    #     # --- Clamp to [0, 1] ---
+    #     winChance = max(0, min(1, winChance))
+    #     print(winChance)
+    #     return winChance
+
+
 
 
 class Node:
