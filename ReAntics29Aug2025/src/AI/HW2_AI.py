@@ -97,28 +97,51 @@ class AIPlayer(Player):
     ##
 
     DEPTH_LIMIT = 3
+    MAX_FRONTIER = 100
 
     def getMove(self, currentState):
         frontierNodes = []
         expandedNodes = []
 
-        rootNode = Node(None, currentState, 0, self.utility(currentState, {}), None)
+        myWorkers = getAntList(currentState, currentState.whoseTurn, (WORKER,))
+        preCarrying = {worker.UniqueID: worker.carrying for worker in myWorkers}
+        
+        rootNode = Node(None, currentState, 0, self.utility(currentState, preCarrying), None)
         frontierNodes.append(rootNode)
 
         while frontierNodes:
             nextNode = min(frontierNodes, key=lambda n: n.evaluation)
-            # if we’ve reached depth limit, stop searching
-            if nextNode.depth >= self.DEPTH_LIMIT:
-                expandedNodes.append(nextNode)
-                break
-
             frontierNodes.remove(nextNode)
             expandedNodes.append(nextNode)
+            
+            # if we’ve reached depth limit, stop expanding but keep finding all of the frontier
+            if nextNode.depth >= self.DEPTH_LIMIT:
+                continue
 
             newNodes = self.expandNode(nextNode)
-            frontierNodes.extend(newNodes)
+            if len(frontierNodes) + len(newNodes) > self.MAX_FRONTIER:
+                allPossible = frontierNodes + newNodes
+                allPossible.sort(key=lambda n: n.evaluation)
+                frontierNodes = allPossible[:self.MAX_FRONTIER]
+            else:
+                frontierNodes.extend(newNodes)
 
-        bestNode = min(frontierNodes, key=lambda n: n.evaluation)
+        allNodes = frontierNodes + expandedNodes
+        depthThreeNodes = [node for node in allNodes if node.depth == self.DEPTH_LIMIT]
+        
+        if not depthThreeNodes:
+            maxDepth = max((n.depth for n in allNodes), default = 0)
+            depthThreeNodes = [n for n in allNodes if n.depth == maxDepth]
+        
+        # emergency fallback
+        if not depthThreeNodes:
+            moves = listAllLegalMoves(currentState)
+            if moves:
+                return random.choice(moves)
+            else:
+                return Move(END)
+        
+        bestNode = min(depthThreeNodes, key=lambda n: n.evaluation)
 
         node = bestNode
         while node.parent is not None and node.depth > 1:
@@ -146,7 +169,6 @@ class AIPlayer(Player):
     #
     # This agent doens't learn
     #
-    def registerWin(self, hasWon):
         #method templaste, not implemented
         pass
 
@@ -164,7 +186,17 @@ class AIPlayer(Player):
         minMoves = min(node.evaluation for node in nodeList)
         bestNodes = [node for node in nodeList if node.evaluation == minMoves]
         return random.choice(bestNodes)
-
+    
+    
+    ##
+    # expandNode
+    # Description: Expands a node to generate all possible child nodes based on legal moves.
+    #
+    # Parameters:
+    #   node - The node to be expanded (Node)
+    #
+    # Return: A list of child nodes generated from the current node
+    ##
     def expandNode(self, node):
         moves = listAllLegalMoves(node.gameState)
         nodeList = []
@@ -190,48 +222,58 @@ class AIPlayer(Player):
     #Return: The evaluation value for the move
     ##
     def utility(self, currentState, preCarrying):
-        evaluation = 0.5  # baseline
-
         myWorkers = getAntList(currentState, currentState.whoseTurn, (WORKER,))
         foods = getConstrList(currentState, None, (FOOD,))
         homeSpots = getConstrList(currentState, currentState.whoseTurn, (TUNNEL, ANTHILL))
-
-        # Get current player's inventory
         myInv = getCurrPlayerInventory(currentState)
+        evaluation = 0.0
+        closestFood = None
+        closestHome = None
 
+        # game over
+        if myInv.foodCount >= 11:
+            return 0.0  # goal reached
+        
+        
         # ----- Incentives / disincentives -----
         numWorkers = len(myWorkers)
         if numWorkers > 2:
-            evaluation -= 0.05 * (numWorkers - 1)  # penalize having more than 1 worker
+            evaluation += 3 * (numWorkers - 2)  # penalize having more than 1 worker
+        elif numWorkers == 0:
+            evaluation += 50  # heavy penalty for no workers
 
         # Stored food incentive
-        evaluation += 0.02 * myInv.foodCount
+        evaluation += 2 * (11 - myInv.foodCount)
 
         # ----- Worker movement / pickup / delivery -----
-        for worker in myWorkers:
-            workerID = worker.UniqueID
-            wasCarrying = preCarrying.get(workerID, False)
+        if myWorkers and foods and homeSpots:
+            totalWorkerDist = 0
+            
+            for worker in myWorkers:
+                workerID = worker.UniqueID
+                wasCarrying = preCarrying.get(workerID, False)
 
-            closestFood = min(foods, key=lambda f: stepsToReach(currentState, worker.coords, f.coords))
-            closestHome = min(homeSpots, key=lambda h: stepsToReach(currentState, worker.coords, h.coords))
+                # Pickup / delivery incentive
+                if not wasCarrying and worker.carrying:  # just picked up food
+                    closestFood = min(foods, key=lambda f: stepsToReach(currentState, worker.coords, f.coords))
+                    totalWorkerDist += stepsToReach(currentState, worker.coords, closestFood.coords)
+                elif wasCarrying and not worker.carrying:  # just delivered food
+                    closestHome = min(homeSpots, key=lambda h: stepsToReach(currentState, worker.coords, h.coords))
+                    totalWorkerDist += stepsToReach(currentState, worker.coords, closestHome.coords)
+                #else:
+                #    # Reward moving toward target
+                #    if not worker.carrying:  # heading to food
+                #        dist = stepsToReach(currentState, worker.coords, closestFood.coords)
+                #        evaluation += 0.005 * max(0, 10 - dist)
+                #    else:  # heading to home
+                #        dist = stepsToReach(currentState, worker.coords, closestHome.coords)
+                #        evaluation += 0.005 * max(0, 10 - dist)
+                        
+            evaluation += totalWorkerDist * 0.1  # weight distance to target
+            
+        evaluation -= myInv.foodCount * 0.1  # reward stored food
 
-            # Pickup / delivery incentive
-            if not wasCarrying and worker.carrying:  # just picked up food
-                evaluation += 0.05
-            elif wasCarrying and not worker.carrying:  # just delivered food
-                evaluation += 0.05
-            else:
-                # Reward moving toward target
-                if not worker.carrying:  # heading to food
-                    dist = stepsToReach(currentState, worker.coords, closestFood.coords)
-                    evaluation += 0.005 * max(0, 10 - dist)
-                else:  # heading to home
-                    dist = stepsToReach(currentState, worker.coords, closestHome.coords)
-                    evaluation += 0.005 * max(0, 10 - dist)
-
-        # Clamp to [0,1]
-        evaluation = max(0, min(1, evaluation))
-        return ((1-evaluation)*10)
+        return max(1, evaluation)
 
 
 class Node:
