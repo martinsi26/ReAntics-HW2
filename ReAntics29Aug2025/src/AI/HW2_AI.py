@@ -192,6 +192,7 @@ class AIPlayer(Player):
         myWorkers = getAntList(currentState, currentState.whoseTurn, (WORKER,))
         foods = getConstrList(currentState, None, (FOOD,))
         homeSpots = getConstrList(currentState, currentState.whoseTurn, (TUNNEL, ANTHILL))
+        myRSoldiers = getAntList(currentState, currentState.whoseTurn, (R_SOLDIER,))
 
         # Get current player's inventory
         myInv = getCurrPlayerInventory(currentState)
@@ -229,6 +230,7 @@ class AIPlayer(Player):
         # Clamp to [0,1]
         evaluation = max(0, min(1, evaluation))
         return ((1-evaluation)*10)
+
 
 
 class Node:
