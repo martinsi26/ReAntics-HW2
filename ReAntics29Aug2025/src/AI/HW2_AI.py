@@ -96,24 +96,27 @@ class AIPlayer(Player):
     #Return: The Move to be made
     ##
     def getMove(self, currentState):
-        moves = listAllLegalMoves(currentState)
-        gameStates = []
-        nodeList = []
+        frontierNodes = []
+        expandedNodes = []
 
-        # Step 1: store pre-move carrying state for all my workers
-        myWorkers = getAntList(currentState, currentState.whoseTurn, (WORKER,))
-        preCarrying = {worker.UniqueID: worker.carrying for worker in myWorkers}
+        rootNode = Node(None, currentState, 0, 10, None)
+        frontierNodes.append(rootNode)
 
-        # Step 2: generate simulated states and evaluate utility
-        for move in moves:
-            gameState = getNextState(currentState, move)
-            gameStates.append(gameState)
-            node = Node(move, gameState, 1, self.utility(gameState, preCarrying), None)
-            nodeList.append(node)
+        for node in frontierNodes:
+            nextNode = min(frontierNodes, key=lambda n: n.evaluation)
+            frontierNodes.remove(nextNode)
+            expandedNodes.append(nextNode)
+            frontierNodes.extend(self.expandNode(nextNode))
 
-        # Step 3: pick the best move
-        winningNode = self.bestMove(nodeList)
-        return winningNode.move
+        bestNode = min(frontierNodes, key=lambda n: n.evaluation)
+
+        node = bestNode
+        depth = node.depth
+        while depth > 1:
+            node = node.parent()
+            depth = node.depth
+
+        return node
 
 
     
@@ -140,13 +143,46 @@ class AIPlayer(Player):
         pass
 
 
+    ##
+    #bestMove
+    #Description: Gets the best move based on evaluation.
+    #
+    #Parameters:
+    #   nodeList - a list of nodes for a given move
+    #
+    #Return: The best evaluated node
+    ##
     def bestMove(self, nodeList):
-        maxChance = max(node.winChance for node in nodeList)
-        bestNodes = [node for node in nodeList if node.winChance == maxChance]
+        minMoves = min(node.evaluation for node in nodeList)
+        bestNodes = [node for node in nodeList if node.evaluation == minMoves]
         return random.choice(bestNodes)
 
+    def expandNode(self, node):
+        moves = listAllLegalMoves(node.gameState)
+        nodeList = []
+
+        myWorkers = getAntList(node.gameState, node.gameState.whoseTurn, (WORKER,))
+        preCarrying = {worker.UniqueID: worker.carrying for worker in myWorkers}
+
+        for move in moves:
+            gameState = getNextState(node.gameState, move)
+            node = Node(move, gameState, node.depth+1, self.utility(gameState, preCarrying), node)
+            nodeList.append(node)
+        
+        return nodeList
+
+    ##
+    #utility
+    #Description: Calculates the evaluation score for a given game state.
+    #
+    #Parameters:
+    #   currentState - The state of the current game waiting for the player's move (GameState)
+    #   preCarrying - A boolean value to see if a worker was carrying food before the move
+    #
+    #Return: The evaluation value for the move
+    ##
     def utility(self, currentState, preCarrying):
-        winChance = 0.5  # baseline
+        evaluation = 0.5  # baseline
 
         myWorkers = getAntList(currentState, currentState.whoseTurn, (WORKER,))
         myRSoldiers = getAntList(currentState, currentState.whoseTurn, (R_SOLDIER,))
@@ -159,10 +195,10 @@ class AIPlayer(Player):
         # ----- Incentives / disincentives -----
         numWorkers = len(myWorkers)
         if numWorkers > 2:
-            winChance -= 0.05 * (numWorkers - 1)  # penalize having more than 1 worker
+            evaluation -= 0.05 * (numWorkers - 1)  # penalize having more than 1 worker
 
         # Stored food incentive
-        winChance += 0.02 * myInv.foodCount
+        evaluation += 0.02 * myInv.foodCount
 
         # ----- Worker movement / pickup / delivery -----
         for worker in myWorkers:
@@ -174,46 +210,29 @@ class AIPlayer(Player):
 
             # Pickup / delivery incentive
             if not wasCarrying and worker.carrying:  # just picked up food
-                winChance += 0.05
+                evaluation += 0.05
             elif wasCarrying and not worker.carrying:  # just delivered food
-                winChance += 0.05
+                evaluation += 0.05
             else:
                 # Reward moving toward target
                 if not worker.carrying:  # heading to food
                     dist = stepsToReach(currentState, worker.coords, closestFood.coords)
-                    winChance += 0.005 * max(0, 10 - dist)
+                    evaluation += 0.005 * max(0, 10 - dist)
                 else:  # heading to home
                     dist = stepsToReach(currentState, worker.coords, closestHome.coords)
-                    winChance += 0.005 * max(0, 10 - dist)
-
-        # ----- Ranged Soldier incentives -----
-        # Encourage having exactly 1 ranged soldier
-        if len(myRSoldiers) > 1:
-            winChance -= 0.05 * (len(myRSoldiers) - 1)
-        elif len(myRSoldiers) == 0:
-            winChance -= 0.05  # small penalty for having no ranged soldier
-        
-        enemyAnts = getAntList(currentState, 1 - currentState.whoseTurn, (WORKER, QUEEN))
-        for r_soldier in myRSoldiers:
-            if enemyAnts:
-                closestEnemy = min(enemyAnts, key=lambda ea: stepsToReach(currentState, r_soldier.coords, ea.coords))
-                dist = stepsToReach(currentState, r_soldier.coords, closestEnemy.coords)
-
-                if dist >= 1:
-                    # Reward moving closer
-                    winChance += 0.01 * max(0, 10 - dist)
+                    evaluation += 0.005 * max(0, 10 - dist)
 
         # Clamp to [0,1]
-        winChance = max(0, min(1, winChance))
-        return winChance
+        evaluation = max(0, min(1, evaluation))
+        return ((1-evaluation)*10)
 
 
 class Node:
-    def __init__(self, move, gameState, depth, winChance, parent):
+    def __init__(self, move, gameState, depth, evaluation, parent):
         self.move = move
         self.gameState = gameState
         self.depth = depth
-        self.winChance = winChance
+        self.evaluation = evaluation
         self.parent = parent
         
 
