@@ -105,12 +105,9 @@ class AIPlayer(Player):
         rootNode = Node(None, currentState, 0, self.utility(currentState, {}), None)
         frontierNodes.append(rootNode)
 
-        while frontierNodes:
+        for i in range(self.DEPTH_LIMIT):
             nextNode = min(frontierNodes, key=lambda n: n.evaluation)
-            # if we’ve reached depth limit, stop searching
-            if nextNode.depth >= self.DEPTH_LIMIT:
-                expandedNodes.append(nextNode)
-                break
+            expandedNodes.append(nextNode)
 
             frontierNodes.remove(nextNode)
             expandedNodes.append(nextNode)
