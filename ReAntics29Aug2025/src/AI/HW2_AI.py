@@ -193,6 +193,8 @@ class AIPlayer(Player):
         foods = getConstrList(currentState, None, (FOOD,))
         homeSpots = getConstrList(currentState, currentState.whoseTurn, (TUNNEL, ANTHILL))
         myRSoldiers = getAntList(currentState, currentState.whoseTurn, (R_SOLDIER,))
+        enemyInv = getEnemyInv(self, currentState)
+        enemyWorkers = [ant for ant in enemyInv.ants if ant.type == WORKER]
 
         # Get current player's inventory
         myInv = getCurrPlayerInventory(currentState)
@@ -204,6 +206,33 @@ class AIPlayer(Player):
 
         # Stored food incentive
         evaluation += 0.02 * myInv.foodCount
+        
+        # ----- Range Soldier build incentive ------
+        numRSoldiers = len(myRSoldiers)
+        
+        # reward building range soldiers when food is enough and there are not too many
+        if myInv.foodCount >= 2 and numRSoldiers < 3:
+            evaluation += 0.03 # small reward for having the resources to build one
+            
+        # reward having range soldiers
+        if numRSoldiers > 0:
+            evaluation += 0.04 * min(numRSoldiers, 3) * (1 - 0.1 * max(0, numRSoldiers - 3))
+            
+        # ----- Range Soldier attack incentive -------
+        for rSoldier in myRSoldiers:
+            if enemyWorkers:
+                # find closest worker
+                closestWorker = min(enemyWorkers, key=lambda w: stepsToReach(currentState, rSoldier.coords, w.coords))
+                distToEnemy = stepsToReach(currentState, rSoldier.coords, closestWorker.coords)
+                
+                if distToEnemy <= 3:
+                    evaluation += 0.06  # reward being in attack range
+                elif distToEnemy <= 6:
+                    evaluation += 0.02 * (6 - distToEnemy) / 6 # reward heaing to enemy
+                    
+            # reward for being in enemy territory
+            if rSoldier.coords[1] >= 5:
+                evaluation += 0.02
 
         # ----- Worker movement / pickup / delivery -----
         for worker in myWorkers:
@@ -228,7 +257,7 @@ class AIPlayer(Player):
                     evaluation += 0.005 * max(0, 10 - dist)
 
         # Clamp to [0,1]
-        evaluation = max(0, min(1, evaluation))
+        evaluation = max(0, min(1, evaluation)) 
         return ((1-evaluation)*10)
 
 
