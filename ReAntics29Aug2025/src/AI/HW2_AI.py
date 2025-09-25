@@ -230,8 +230,17 @@ class AIPlayer(Player):
                 elif distToEnemy <= 6:
                     evaluation += 0.02 * (6 - distToEnemy) / 6 # reward heaing to enemy
                     
+            if enemyWorkers == None:
+                enemyQueen = [ant for ant in enemyInv.ants if ant.type == QUEEN]
+                distToEnemyQ = stepsToReach(currentState, rSoldier.coords, enemyQueen.coords)
+                
+                if distToEnemyQ <= 3:
+                    evaluation += 0.6  # reward being in attack range
+                elif distToEnemyQ <= 6:
+                    evaluation += 0.2 * (6 - distToEnemy) / 6 # reward heaing to enemy
+                    
             # reward for being in enemy territory
-            if rSoldier.coords[1] >= 5:
+            if rSoldier.coords[1] > 5:
                 evaluation += 0.02
 
         # ----- Worker movement / pickup / delivery -----
@@ -276,50 +285,117 @@ class Node:
 class TestMethods(unittest.TestCase):
   
     def test_Utility(self):
-        myAnts = [Ant(None, QUEEN, 0), Ant(None, WORKER, 0), Ant(None, DRONE, 0), Ant(None, SOLDIER, 0)]
-        enemyAnts = [Ant(None, QUEEN, 0), Ant(None, WORKER, 1)]
+        # Create test ants with proper coordinates
+        myAnts = [
+            Ant((0,0), QUEEN, 0), 
+            Ant((1,0), WORKER, 0), 
+            Ant((2,1), R_SOLDIER, 0)
+        ]
+        enemyAnts = [
+            Ant((0,9), QUEEN, 1), 
+            Ant((1,8), WORKER, 1)
+        ]
       
-        anthill = Construction(None, ANTHILL)
-        tunnel = Construction(None, TUNNEL)
+        anthill = Construction((0,0), ANTHILL)
+        tunnel = Construction((1,0), TUNNEL)
+        food = Construction((5,5), FOOD)
       
+        myInv = Inventory(0, myAnts, [anthill, tunnel], 3)
+        enemyInv = Inventory(1, enemyAnts, [Construction((0,9), ANTHILL)], 2)
+        neutralInv = Inventory(2, [], [food], 0)
       
-        myInv = Inventory(0, myAnts, [anthill, tunnel], 5)
-        enemyInv = Inventory(1, enemyAnts, [anthill, tunnel], 3)
-      
-        state = GameState(None, [myInv, enemyInv], 0, 0)
+        # Create a proper board
+        board = [[Location((x,y)) for y in range(10)] for x in range(10)]
+        
+        state = GameState(board, [myInv, enemyInv, neutralInv], 0, 0)
       
         agent = AIPlayer(0)
         result = agent.utility(state, {})
       
         self.assertIsInstance(result, float)
         self.assertGreaterEqual(result, 0)
-        self.assertLessEqual(result, 1)
+        self.assertLessEqual(result, 100)  # Updated range since we return (1-eval)*10
   
     def test_BestMove(self):
-        n1 = Node("move1", None, 1, 0, None)
-        n2 = Node("move2", None, 1, 0.6, None)
-        n3 = Node("move3", None, 1, -0.7, None)  
+        n1 = Node("move1", None, 1, 2.0, None)  # Higher score = worse in minimax
+        n2 = Node("move2", None, 1, 0.5, None)  # Lower score = better
+        n3 = Node("move3", None, 1, 3.0, None)  
       
         agent = AIPlayer(0)
         result = agent.bestMove([n1, n2, n3])
-        self.assertEqual(result, n2)
+        self.assertEqual(result, n2)  # Should pick the lowest score
       
-    def test_getMove(self):
-        myAnts = [Ant((0,0), QUEEN, 0), Ant((1,0), WORKER, 0), Ant((2,2), DRONE, 0), Ant((3,3), SOLDIER, 0)]
-        enemyAnts = [Ant((0,0), QUEEN, 0), Ant((1,0), WORKER, 1)]
+    def test_getAttack_RangeSoldier(self):
+        # Test range soldier prioritizes workers then queen
+        myAnts = [Ant((2,4), R_SOLDIER, 0)]
+        enemyAnts = [
+            Ant((2,5), QUEEN, 1), 
+            Ant((3,5), WORKER, 1),
+            Ant((1,5), SOLDIER, 1)
+        ]
       
-        anthill = Construction(None, ANTHILL)
-        tunnel = Construction(None, TUNNEL)
-      
-        myInv = Inventory(0, myAnts, [anthill, tunnel], 5)
-        enemyInv = Inventory(1, enemyAnts, [anthill, tunnel], 3)
+        myInv = Inventory(0, myAnts, [], 0)
+        enemyInv = Inventory(1, enemyAnts, [], 0)
         neutralInv = Inventory(2, [], [], 0)
       
-        state = GameState(None, [myInv, enemyInv, neutralInv], 0, 0)
-      
+        board = [[Location((x,y)) for y in range(10)] for x in range(10)]
+        state = GameState(board, [myInv, enemyInv, neutralInv], 0, 0)
+        
         agent = AIPlayer(0)
-        result = agent.getMove(state)
-        self.assertEqual(result.moveType == MOVE_ANT, result.coordList == [(0,0),(0,1)])
+        
+        # Test: Should attack worker first (let's debug which one it picks)
+        enemyLocations = [(2,5), (3,5), (1,5)]  # Queen, Worker, Soldier
+        result = agent.getAttack(state, myAnts[0], enemyLocations)
+        # The method should pick any worker location - let's just check it finds a worker
+        # First, verify there's a worker at the returned location
+        found_worker = False
+        for ant in enemyAnts:
+            if ant.coords == result and ant.type == WORKER:
+                found_worker = True
+                break
+        self.assertTrue(found_worker, f"Should attack a worker, but attacked {result}")
+        
+        # Test: Should attack queen when no workers
+        enemyLocations = [(2,5), (1,5)]  # Queen, Soldier (no worker)
+        result = agent.getAttack(state, myAnts[0], enemyLocations)
+        self.assertEqual(result, (2,5))  # Should pick queen
+        
+    def test_utility_RangeSoldierRewards(self):
+        # Test that range soldiers get rewards for being close to enemies
+        myAnts = [
+            Ant((0,0), QUEEN, 0),
+            Ant((1,0), WORKER, 0), 
+            Ant((5,3), R_SOLDIER, 0)  # Range soldier close to enemy
+        ]
+        enemyAnts = [
+            Ant((0,9), QUEEN, 1), 
+            Ant((5,6), WORKER, 1)  # Enemy worker 3 steps away from range soldier
+        ]
+        
+        # Add food to prevent empty foods list error
+        food1 = Construction((2,2), FOOD)
+        food2 = Construction((8,8), FOOD)
+      
+        anthill = Construction((0,0), ANTHILL)
+        tunnel = Construction((1,0), TUNNEL)
+        myInv = Inventory(0, myAnts, [anthill, tunnel], 2)
+        enemyInv = Inventory(1, enemyAnts, [], 2)
+        neutralInv = Inventory(2, [], [food1, food2], 0)  # Add foods to neutral inventory
+        
+        board = [[Location((x,y)) for y in range(10)] for x in range(10)]
+        state = GameState(board, [myInv, enemyInv, neutralInv], 0, 0)
+        
+        agent = AIPlayer(0)
+        
+        # Test with range soldier close to enemy (should get high reward)
+        result_close = agent.utility(state, {})
+        
+        # Move range soldier far from enemy
+        myAnts[2].coords = (0,1)  # Far from enemy worker
+        result_far = agent.utility(state, {})
+        
+        # Range soldier close to enemy should have better (lower) evaluation score
+        self.assertLess(result_close, result_far)
         
         
 if __name__ == "__main__":

@@ -1,1 +1,1 @@
-{"games": [{"type": "Two Player", "num_games": 1, "players": ["HW2_AI", "Simple Food Gatherer"]}], "additional_settings": {"swap": true, "verbose": false, "timeout": false, "autorestart": true, "pause": false, "pauseIllegal": false, "timeout_limit": "-1", "layout_chosen": "Random Override"}, "pause_conditions": []}
+{"games": [], "additional_settings": {"swap": false, "verbose": false, "timeout": false, "autorestart": true, "pause": true, "pauseIllegal": false, "timeout_limit": "-1", "layout_chosen": "Random Override"}, "pause_conditions": []}
