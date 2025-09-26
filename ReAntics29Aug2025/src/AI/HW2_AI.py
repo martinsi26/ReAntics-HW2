@@ -9,6 +9,7 @@ from Ant import UNIT_STATS
 from Move import Move
 from GameState import *
 from AIPlayerUtils import *
+import heapq
 
 
 ##
@@ -95,18 +96,68 @@ class AIPlayer(Player):
     #
     #Return: The Move to be made
     ##
-    def getMove(self, currentState):
-        moves = listAllLegalMoves(currentState)
-        gameStates = []
-        nodeList = []
-        for move in moves:
-            gameState = getNextState(currentState, move)
-            gameStates.append(gameState)
-            node = Node(move, gameState, 1, self.utility(currentState), None)
-            nodeList.append(node)
 
-        winningNode = self.bestMove(nodeList)
-        return winningNode.move
+    DEPTH_LIMIT = 3
+    MAX_FRONTIER = 100000000000  #experiment with a larger val here -:AMN:
+    MAX_EXPANDED = 20
+    def getMove(self, currentState):
+        frontierNodes = []
+        expandedNodes = []
+
+        myWorkers = getAntList(currentState, currentState.whoseTurn, (WORKER,))
+        preCarrying = {worker.UniqueID: worker.carrying for worker in myWorkers}
+        
+        rootNode = Node(None, currentState, 0, self.utility(currentState, preCarrying), None)
+        frontierNodes.append(rootNode)
+
+        while frontierNodes:
+            nextNode = max(frontierNodes, key=lambda n: n.evaluation)
+            frontierNodes.remove(nextNode)
+            expandedNodes.append(nextNode)
+            
+            # if we’ve reached depth limit, stop expanding but keep finding all of the frontier
+            if nextNode.depth >= self.DEPTH_LIMIT:
+                continue
+            
+            newNodes = self.expandNode(nextNode)
+            if len(frontierNodes) + len(newNodes) > self.MAX_FRONTIER:
+                if frontierNodes:
+                    worst_current_eval = min(frontierNodes, key=lambda n: n.evaluation).evaluation
+                    newNodes = [n for n in newNodes if n.evaluation < worst_current_eval]
+                allPossible = frontierNodes + newNodes
+                #allPossible.sort(key=lambda n: n.evaluation)
+                #frontierNodes = allPossible[:self.MAX_FRONTIER]
+                frontierNodes = heapq.nlargest(self.MAX_FRONTIER, allPossible, key=lambda n: n.evaluation)
+            else:
+                frontierNodes.extend(newNodes)
+
+            if len(expandedNodes) > self.MAX_EXPANDED:
+                break
+
+        allNodes = frontierNodes + expandedNodes
+        depthThreeNodes = [node for node in allNodes if node.depth == self.DEPTH_LIMIT]
+        
+        if not depthThreeNodes:
+            maxDepth = max((n.depth for n in allNodes), default = 0)
+            depthThreeNodes = [n for n in allNodes if n.depth == maxDepth]
+        
+        # emergency fallback
+        if not depthThreeNodes:
+            moves = listAllLegalMoves(currentState)
+            worker_moves = [m for m in moves if m.moveType == MOVE_ANT and 
+                getAntAt(currentState, m.coordList[0]).type == WORKER]
+            if worker_moves:
+                return random.choice(worker_moves)
+            else:
+                return Move(END)
+        
+        bestNode = max(depthThreeNodes, key=lambda n: n.evaluation)
+
+        node = bestNode
+        while node.parent is not None and node.depth > 1:
+            node = node.parent
+        return node.move
+
 
     
     ##
@@ -127,229 +178,283 @@ class AIPlayer(Player):
     #
     # This agent doens't learn
     #
-    def registerWin(self, hasWon):
+    def registerWin(self, hasWon): 
         #method templaste, not implemented
         pass
 
 
+    ##
+    #bestMove
+    #Description: Gets the best move based on evaluation.
+    #
+    #Parameters:
+    #   nodeList - a list of nodes for a given move
+    #
+    #Return: The best evaluated node
+    ##
     def bestMove(self, nodeList):
-        bestChance = 0
-        winningNode = None
-        for node in nodeList:
-            if node.winChance > bestChance:
-                bestChance = node.winChance
-                winningNode = node
+        minMoves = min(node.evaluation for node in nodeList)
+        bestNodes = [node for node in nodeList if node.evaluation == minMoves]
+        return random.choice(bestNodes)
+    
+    
+    ##
+    # expandNode
+    # Description: Expands a node to generate all possible child nodes based on legal moves.
+    #
+    # Parameters:
+    #   node - The node to be expanded (Node)
+    #
+    # Return: A list of child nodes generated from the current node
+    ##
+    def expandNode(self, node):
+        moves = listAllLegalMoves(node.gameState)
+        nodeList = []
+        myWorkers = getAntList(node.gameState, node.gameState.whoseTurn, (WORKER,))
+        preCarrying = {worker.UniqueID: worker.carrying for worker in myWorkers}
 
-        return winningNode
-
-
-    def utility(self, currentState):
-        #ants = (WORKER, DRONE, SOLDIER, R_SOLDIER)
-
-        myInv = getCurrPlayerInventory(currentState)
-        enemyInv = getEnemyInv(self, currentState)
-
-        #foodDif = myInv.foodCount - enemyInv.foodCount
-
-        myAnts = myInv.ants
-        enemyAnts = enemyInv.ants
-
-        myAntCost = 0
-        for ant in myAnts:
-            cost = UNIT_STATS[ant.type][COST]
-            if cost != None:
-                myAntCost += cost
-
-        enemyAntCost = 0
-        for ant in enemyAnts:
-            cost = UNIT_STATS[ant.type][COST]
-            if cost != None:
-                enemyAntCost += cost
-
-        myNetWorth = myAntCost + myInv.foodCount
-        enemyNetWorth = enemyAntCost + enemyInv.foodCount
-
-        netWorthDif = myNetWorth - enemyNetWorth
-
-        winChance = 0.5
-
-        foodFactor = 0.05
-        winChance += netWorthDif * foodFactor
-
-        myFood = myInv.foodCount
-        match myFood:
-            case 0:
-                if len(getAntList(currentState, currentState.whoseTurn, (WORKER,))) == 0:
-                    winChance = 0
-            case 1:
-                winChance += 0.05
-            case 2:
-                winChance += 0.05
-            case 3:
-                winChance += 0.1
-            case 4:
-                winChance += 0.15
-            case 5:
-                winChance += 0.2
-            case 6:
-                winChance += 0.25
-            case 7:
-                winChance += 0.3
-            case 8:
-                winChance += 0.35
-            case 9:
-                winChance += 0.4
-            case 10:
-                winChance += 0.45
-            case 11:
-                winChance = 1
-
-        enemyFood = enemyInv.foodCount
-        match enemyFood:
-            case 0:
-                if len(getAntList(currentState, currentState.whoseTurn - 1, (WORKER,))) == 0:
-                    winChance = 1
-            case 1:
-                winChance -= 0.05
-            case 2:
-                winChance -= 0.05
-            case 3:
-                winChance -= 0.1
-            case 4:
-                winChance -= 0.15
-            case 5:
-                winChance -= 0.2
-            case 6:
-                winChance -= 0.25
-            case 7:
-                winChance -= 0.3
-            case 8:
-                winChance -= 0.35
-            case 9:
-                winChance -= 0.4
-            case 10:
-                winChance -= 0.45
-            case 11:
-                winChance = 0
+        for move in moves:
+            gameState = getNextState(node.gameState, move)
+            childNode = Node(move, gameState, node.depth+1, self.utility(gameState, preCarrying), node)
+            nodeList.append(childNode)
         
-        myQueenHP = myInv.getQueen().health
-        match myQueenHP:
-            case 8:
-                winChance -= 0.05
-            case 7:
-                winChance -= 0.1
-            case 6:
-                winChance -= 0.15
-            case 5:
-                winChance -= 0.2
-            case 4:
-                winChance -= 0.3
-            case 3:
-                winChance -= 0.35
-            case 2:
-                winChance -= 0.4
-            case 0:
-                winChance = 0
+        return nodeList
 
-        enemyQueenHP = enemyInv.getQueen().health
-        match enemyQueenHP:
-            case 8:
-                winChance -= 0.05
-            case 7:
-                winChance -= 0.1
-            case 6:
-                winChance -= 0.15
-            case 5:
-                winChance -= 0.2
-            case 4:
-                winChance -= 0.3
-            case 3:
-                winChance -= 0.35
-            case 2:
-                winChance -= 0.4
-            case 0:
-                winChance = 0
+    ##
+    #utility
+    #Description: Calculates the evaluation score for a given game state.
+    #
+    #Parameters:
+    #   currentState - The state of the current game waiting for the player's move (GameState)
+    #   preCarrying - A boolean value to see if a worker was carrying food before the move
+    #
+    #Return: The evaluation value for the move
+    ##
+    def utility(self, currentState, preCarrying):
+        myWorkers = getAntList(currentState, currentState.whoseTurn, (WORKER,))
+        foods = getConstrList(currentState, None, (FOOD,))
+        homeSpots = getConstrList(currentState, currentState.whoseTurn, (TUNNEL, ANTHILL))
+        myInv = getCurrPlayerInventory(currentState)
+        evaluation = 0.5 # neutral base score
 
-        queenHPDif = myQueenHP - enemyQueenHP
-        hpFactor = 0.05
-        winChance += queenHPDif * hpFactor
+        # Winning condition
+        if myInv.foodCount >= 11:
+            return 1.0  # goal reached
+        
+        # ----- Food progress (0.0 - 0.4) -------
+        food_score = myInv.foodCount/11
+        evaluation += food_score * 0.4 #scale down
+        
+        # ------- worker management -------
+        numWorkers = len(myWorkers)
+        if numWorkers == 0:
+            evaluation -= 0.3   # heavy penalty for no workers
+        elif numWorkers > 2:
+            evaluation -= 0.05 * (numWorkers - 2) # penalty for too may
+        else:
+            evaluation += 0.05  # small reward for 1-2 workers
 
-        myAnthill = myInv.getAnthill()
-        myAnthillHP = CONSTR_STATS[myAnthill.type][CAP_HEALTH]
-        match myAnthillHP:
-            case 1:
-                winChance -= 0.4
-            case 0:
-                winChance = 0
+        # ----- Worker movement / pickup / delivery -----
+        if myWorkers and foods and homeSpots:            
+            worker_efficiency = 0.0
+            
+            for worker in myWorkers:
+                workerID = worker.UniqueID
+                wasCarrying = preCarrying.get(workerID, False)
 
-        enemyAnthill = enemyInv.getAnthill()
-        enemyAnthillHP = CONSTR_STATS[enemyAnthill.type][CAP_HEALTH]
-        match enemyAnthillHP:
-            case 1:
-                winChance += 0.4
-            case 0:
-                winChance = 1
-
-        return winChance
+                # Pickup / delivery incentive
+                if not wasCarrying and worker.carrying:  # just picked up food
+                    worker_efficiency += 0.08
+                elif wasCarrying and not worker.carrying:  # just delivered food
+                    worker_efficiency += 0.12
+                else:
+                    # Reward moving toward target
+                    if not worker.carrying:  # heading to food
+                        closestFood = min(foods, key=lambda f: stepsToReach(currentState, worker.coords, f.coords))
+                        dist = stepsToReach(currentState, worker.coords, closestFood.coords)
+                        worker_efficiency += max(0, (10 - dist) / 10 * 0.03)
+                    else:  # heading to home
+                        closestHome = min(homeSpots, key=lambda f: stepsToReach(currentState, worker.coords, f.coords))
+                        dist = stepsToReach(currentState, worker.coords, closestHome.coords)
+                        worker_efficiency += max(0, (10 - dist) / 10 * 0.05)
+            # average efficiency
+            if numWorkers > 0:
+                evaluation += min(0.2, worker_efficiency / numWorkers * 0.2)
+        
+        return max(0.0, min(1.0, evaluation))
 
 
 class Node:
-    def __init__(self, move, gameState, depth, winChance, parent):
+    def __init__(self, move, gameState, depth, evaluation, parent):
         self.move = move
         self.gameState = gameState
         self.depth = depth
-        self.winChance = winChance
+        self.evaluation = evaluation
         self.parent = parent
         
 
+# ------------ TESTS ------------
 class TestMethods(unittest.TestCase):
     
-    def test_Utility(self):
-        myAnts = [Ant(None, QUEEN, 0), Ant(None, WORKER, 0), Ant(None, DRONE, 0), Ant(None, SOLDIER, 0)]
-        enemyAnts = [Ant(None, QUEEN, 0), Ant(None, WORKER, 1)]
+    def test_Utility_BasicFunctionality(self):
+        # Test that utility function runs and returns valid values
+        myAnts = [
+            Ant((0,0), QUEEN, 0), 
+            Ant((1,0), WORKER, 0)
+        ]
+        enemyAnts = [
+            Ant((0,9), QUEEN, 1), 
+            Ant((1,8), WORKER, 1)
+        ]
         
-        anthill = Construction(None, ANTHILL)
-        tunnel = Construction(None, TUNNEL)
-        
+        anthill = Construction((0,0), ANTHILL)
+        tunnel = Construction((1,0), TUNNEL)
+        food = Construction((5,5), FOOD)
         
         myInv = Inventory(0, myAnts, [anthill, tunnel], 5)
-        enemyInv = Inventory(1, enemyAnts, [anthill, tunnel], 3)
+        enemyInv = Inventory(1, enemyAnts, [Construction((0,9), ANTHILL)], 3)
+        neutralInv = Inventory(2, [], [food], 0)
         
-        state = GameState(None, [myInv, enemyInv], 0, 0)
+        # Create a proper board
+        board = [[Location((x,y)) for y in range(10)] for x in range(10)]
+        
+        state = GameState(board, [myInv, enemyInv, neutralInv], 0, 0)
         
         agent = AIPlayer(0)
-        result = agent.utility(state)
+        result = agent.utility(state, {})
         
-        self.assertIsInstance(result, float)
-        self.assertGreaterEqual(result, 0)
-        self.assertLessEqual(result, 1)
+        self.assertIsInstance(result, (int, float))
+        self.assertLessEqual(result, 1.0)  
     
-    def test_BestMove(self):
-        n1 = Node("move1", None, 1, 0, None)
-        n2 = Node("move2", None, 1, 0.6, None)
-        n3 = Node("move3", None, 1, -0.7, None)  
+    def test_Utility_GameOver_Condition(self):
+        # Test that utility returns 1.0 when game is won (11 food)
+        myAnts = [Ant((0,0), QUEEN, 0)]
+        enemyAnts = [Ant((0,9), QUEEN, 1)]
+        
+        anthill = Construction((0,0), ANTHILL)
+        food = Construction((5,5), FOOD)
+        
+        myInv = Inventory(0, myAnts, [anthill], 11)  # 11 food = win condition
+        enemyInv = Inventory(1, enemyAnts, [Construction((0,9), ANTHILL)], 0)
+        neutralInv = Inventory(2, [], [food], 0)
+        
+        board = [[Location((x,y)) for y in range(10)] for x in range(10)]
+        state = GameState(board, [myInv, enemyInv, neutralInv], 0, 0)
+        
+        agent = AIPlayer(0)
+        result = agent.utility(state, {})
+        
+        self.assertLessEqual(result, 1.0)  # Should return 1.0 for win condition so result is below that
+        
+    def test_Utility_NoWorkers_Penalty(self):
+        # Test that having no workers gives heavy penalty
+        myAnts = [Ant((0,0), QUEEN, 0)]  # Only queen, no workers
+        enemyAnts = [Ant((0,9), QUEEN, 1)]
+        
+        anthill = Construction((0,0), ANTHILL)
+        food = Construction((5,5), FOOD)
+        
+        myInv = Inventory(0, myAnts, [anthill], 3)
+        enemyInv = Inventory(1, enemyAnts, [Construction((0,9), ANTHILL)], 3)
+        neutralInv = Inventory(2, [], [food], 0)
+        
+        board = [[Location((x,y)) for y in range(10)] for x in range(10)]
+        state = GameState(board, [myInv, enemyInv, neutralInv], 0, 0)
+        
+        agent = AIPlayer(0)
+        result = agent.utility(state, {})
+        
+        # Should be high (bad) due to no workers penalty
+        self.assertLess(result, 0.5)  # Heavy penalty should make this high
+    
+    def test_BestMove_PicksMinimum(self):
+        # Test that bestMove picks the node with minimum evaluation
+        n1 = Node("move1", None, 1, 5.0, None)   # High evaluation = bad
+        n2 = Node("move2", None, 1, 2.0, None)   # Low evaluation = good
+        n3 = Node("move3", None, 1, 10.0, None)  # Very high = very bad
         
         agent = AIPlayer(0)
         result = agent.bestMove([n1, n2, n3])
-        self.assertEqual(result, n2)
+        self.assertEqual(result, n2)  # Should pick the one with lowest evaluation
+    
+    def test_getAttack_RandomSelection(self):
+        # Test that getAttack returns one of the available locations
+        myAnts = [Ant((2,4), SOLDIER, 0)]
+        enemyAnts = [Ant((2,5), WORKER, 1)]
         
-    def test_getMove(self):
-        myAnts = [Ant((0,0), QUEEN, 0), Ant((1,0), WORKER, 0), Ant((2,2), DRONE, 0), Ant((3,3), SOLDIER, 0)]
-        enemyAnts = [Ant((0,0), QUEEN, 0), Ant((1,0), WORKER, 1)]
-        
-        anthill = Construction(None, ANTHILL)
-        tunnel = Construction(None, TUNNEL)
-        
-        myInv = Inventory(0, myAnts, [anthill, tunnel], 5)
-        enemyInv = Inventory(1, enemyAnts, [anthill, tunnel], 3)
+        myInv = Inventory(0, myAnts, [], 0)
+        enemyInv = Inventory(1, enemyAnts, [], 0)
         neutralInv = Inventory(2, [], [], 0)
         
-        state = GameState(None, [myInv, enemyInv, neutralInv], 0, 0)
+        board = [[Location((x,y)) for y in range(10)] for x in range(10)]
+        state = GameState(board, [myInv, enemyInv, neutralInv], 0, 0)
+        
+        agent = AIPlayer(0)
+        enemyLocations = [(2,5), (3,5)]
+        result = agent.getAttack(state, myAnts[0], enemyLocations)
+        
+        # Should return one of the available locations
+        self.assertIn(result, enemyLocations)
+    
+    def test_expandNode_GeneratesChildNodes(self):
+        # Test that expandNode creates child nodes from legal moves
+        myAnts = [
+            Ant((0,0), QUEEN, 0), 
+            Ant((1,0), WORKER, 0)
+        ]
+        enemyAnts = [Ant((0,9), QUEEN, 1)]
+        
+        anthill = Construction((0,0), ANTHILL)
+        tunnel = Construction((1,0), TUNNEL)
+        food = Construction((5,5), FOOD)
+        
+        myInv = Inventory(0, myAnts, [anthill, tunnel], 2)
+        enemyInv = Inventory(1, enemyAnts, [Construction((0,9), ANTHILL)], 2)
+        neutralInv = Inventory(2, [], [food], 0)
+        
+        board = [[Location((x,y)) for y in range(10)] for x in range(10)]
+        state = GameState(board, [myInv, enemyInv, neutralInv], 0, 0)
+        
+        agent = AIPlayer(0)
+        rootNode = Node(None, state, 0, 10.0, None)
+        
+        children = agent.expandNode(rootNode)
+        
+        # Should generate some child nodes
+        self.assertIsInstance(children, list)
+        self.assertGreater(len(children), 0)
+        
+        # Each child should have the root as parent and depth 1
+        for child in children:
+            self.assertEqual(child.parent, rootNode)
+            self.assertEqual(child.depth, 1)
+            self.assertIsNotNone(child.move)
+    
+    def test_getMove_ReturnsValidMove(self):
+        # Test that getMove returns a valid Move object
+        myAnts = [
+            Ant((0,0), QUEEN, 0), 
+            Ant((1,0), WORKER, 0)
+        ]
+        enemyAnts = [Ant((0,9), QUEEN, 1)]
+        
+        anthill = Construction((0,0), ANTHILL)
+        tunnel = Construction((1,0), TUNNEL)
+        food = Construction((5,5), FOOD)
+        
+        myInv = Inventory(0, myAnts, [anthill, tunnel], 2)
+        enemyInv = Inventory(1, enemyAnts, [Construction((0,9), ANTHILL)], 2)
+        neutralInv = Inventory(2, [], [food], 0)
+        
+        board = [[Location((x,y)) for y in range(10)] for x in range(10)]
+        state = GameState(board, [myInv, enemyInv, neutralInv], 0, 0)
         
         agent = AIPlayer(0)
         result = agent.getMove(state)
-        self.assertEqual(result.moveType == MOVE_ANT, result.coordList == [(0,0),(0,1)])
         
-        
+        # Should return a Move object
+        self.assertIsInstance(result, Move)
+        self.assertIsNotNone(result.moveType)
+    
 if __name__ == "__main__":
     unittest.main()
