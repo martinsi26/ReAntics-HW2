@@ -9,7 +9,7 @@ from Ant import UNIT_STATS
 from Move import Move
 from GameState import *
 from AIPlayerUtils import *
-
+import heapq
 
 
 ##
@@ -98,9 +98,8 @@ class AIPlayer(Player):
     ##
 
     DEPTH_LIMIT = 3
-    MAX_FRONTIER = 1000  #experiment with a larger val here -:AMN:
-    MAX_EXPANDED = 100
-
+    MAX_FRONTIER = 100000000000  #experiment with a larger val here -:AMN:
+    MAX_EXPANDED = 20
     def getMove(self, currentState):
         frontierNodes = []
         expandedNodes = []
@@ -126,8 +125,9 @@ class AIPlayer(Player):
                     worst_current_eval = min(frontierNodes, key=lambda n: n.evaluation).evaluation
                     newNodes = [n for n in newNodes if n.evaluation < worst_current_eval]
                 allPossible = frontierNodes + newNodes
-                allPossible.sort(key=lambda n: n.evaluation)
-                frontierNodes = allPossible[:self.MAX_FRONTIER]
+                #allPossible.sort(key=lambda n: n.evaluation)
+                #frontierNodes = allPossible[:self.MAX_FRONTIER]
+                frontierNodes = heapq.nlargest(self.MAX_FRONTIER, allPossible, key=lambda n: n.evaluation)
             else:
                 frontierNodes.extend(newNodes)
 
@@ -210,7 +210,6 @@ class AIPlayer(Player):
     def expandNode(self, node):
         moves = listAllLegalMoves(node.gameState)
         nodeList = []
-
         myWorkers = getAntList(node.gameState, node.gameState.whoseTurn, (WORKER,))
         preCarrying = {worker.UniqueID: worker.carrying for worker in myWorkers}
 
@@ -281,7 +280,6 @@ class AIPlayer(Player):
             # average efficiency
             if numWorkers > 0:
                 evaluation += min(0.2, worker_efficiency / numWorkers * 0.2)
-
         
         return max(0.0, min(1.0, evaluation))
 
